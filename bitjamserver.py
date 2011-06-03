@@ -182,8 +182,8 @@ class WorkManager(threading.Thread):
                             if len(piece) == 8:
                                 # it's (probably) a nonce! :O
                                 ishex = True
-                                for c in piece:
-                                    if c not in '0123456789abcdefABCDEF':
+                                for ch in piece:
+                                    if ch not in '0123456789abcdefABCDEF':
                                         ishex = False
                                         break
                                 if ishex:
