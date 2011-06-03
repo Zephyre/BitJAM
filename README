@@ -1,0 +1,47 @@
+BitJAM: Bitcoin Java Applet Miner
+
+
+
+First of all, please donate some bitcoins to:
+
+1FyMZskjC9fXSYATVXP3TH3NNeD9E1Pynp
+
+I'm really really poor so please at least consider it. Thanks. ._.
+Now with that out of the way, onto the rest of the readme!
+
+
+
+Usage:
+
+
+
+Embed the BitJAM java applet (BitJAM.class) in your webpage, like this:
+
+<APPLET CODE="BitJAM" width=1 height=1></APPLET>
+
+
+Then run bitjamserver.py on your server.
+bitjamserver.py must be run from the same ip as the applet.
+Any computer on the same local area network should work,
+as long as it's receiving tcp traffic on port 15063.
+So, make sure port 15063 isn't blocked by any firewalls,
+and make sure that tcp traffic on port 15063 is being forwarded
+to the machine bitjamserver.py is running on if you're behind NAT.
+
+
+bitjamserver.py example arguments:
+-u username --pass password -o host -p port
+port defaults to 8332.
+
+
+
+
+That's about it. It takes a while for shares to be generated, but I'm 
+guessing that with enough web traffic, it should generate a decent 
+amount.
+
+For future releases, I have some ideas for speeding the app up, I think
+I could probably bump the speed up somewhere between 2 to 8 times the
+current level, add parameter customization to the applet, and possibly 
+increase the number of users that can be handled simultaneously, among 
+other things.
