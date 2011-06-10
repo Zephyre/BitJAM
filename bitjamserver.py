@@ -1,5 +1,8 @@
 #!/usr/bin/python
 
+SAVE_SHARES = True
+
+import os, os.path
 import hashlib
 import struct
 import socket
@@ -137,7 +140,7 @@ class WorkManager(threading.Thread):
         except socket.error, e:
             if e.errno == 11: # socket isn't ready
                 pass
-            elif e.errno in (32, 104):
+            elif e.errno in (32, 104, 110): # 110 is timeout
                 printer.say('removing client',client[1])
                 self.clients.remove(client)
             else:
@@ -146,8 +149,8 @@ class WorkManager(threading.Thread):
     
     def init_client(self, client):
         c = client
-        if len(c) < 4:
-            c = [c[0], c[1], 'init', '', '']
+        if len(c) < 6:
+            c = [c[0], c[1], 'init', '', '', 0]
         else:
             c[2] == 'init'
         self.send_work(c)
@@ -179,6 +182,7 @@ class WorkManager(threading.Thread):
                             c[3] = c[3] + got
                         csplit = c[3].split('\n')
                         for piece in csplit[:-1]:
+                            if piece[-1] == '\r': piece = piece[:-1]
                             if len(piece) == 8:
                                 # it's (probably) a nonce! :O
                                 ishex = True
@@ -187,12 +191,22 @@ class WorkManager(threading.Thread):
                                         ishex = False
                                         break
                                 if ishex:
-                                    self.got.append(struct.unpack('<I', piece.decode('hex'))[0])
+                                    self.got.append((struct.unpack('<I', piece.decode('hex'))[0], c))
                             elif piece.startswith('http://'):
                                 # this could be used to differentiate
                                 # between different accounts, if you
                                 # made this into an embeddable service thing
-                                c[4] = piece
+                                if '?sendto=' in piece:
+                                    st = piece.split('?sendto=')
+                                    good_sendto = True
+                                    for pchar in st[-1]:
+                                        if pchar not in '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz':
+                                            good_sendto = False
+                                            break
+                                    if good_sendto and 35 > len(st[-1]) > 24:
+                                        c[4] = st[-1]
+                                #else:
+                                #    c[4] = piece
                             else:
                                 # probably unsupported features or somebody sending random data trying to break stuff
                                 printer.say('...but the thing I got is weird!')
@@ -201,7 +215,7 @@ class WorkManager(threading.Thread):
                     except socket.error, e:
                         if e.errno == 11: # socket isn't ready
                             pass
-                        elif e.errno in (32,104): # client left
+                        elif e.errno in (32,104,110): # client left,110=timeout
                             printer.say('removing client',c[1])
                             self.clients.remove(c)
                         else: # a strange and mysterious occurence
@@ -251,12 +265,13 @@ class BitcoinRPC(object):
         self.OID += 1
         obj = {'version':'1.1','method':method,'id':self.OID}
         obj['params'] = ((params is None) and ([],) or (params,))[0]
-        self.conn.request('POST','/',json.dumps(obj),headers)
         badresp = False
         try:
+            self.conn.request('POST','/',json.dumps(obj),headers)
             resp = self.conn.getresponse()
-        except:
+        except Exception, e:
             badresp = True
+            print e
         if badresp:
             printer.say('rpc got a bad response')
             return None
@@ -294,9 +309,10 @@ class Miner(object):
         self.work_manager = WorkManager()
         self.work_manager.start()
 
-    def check_work(self, datastr, targetstr, nonce):
+    def check_work(self, datastr, targetstr, nonce, byteswap=False):
         target = long(targetstr.decode('hex')[::-1].encode('hex'), 16)
-        nonce_bin = struct.pack('<I', nonce)
+        if not byteswap: nonce_bin = struct.pack('<I', nonce)
+        else: nonce_bin = struct.pack('>I', nonce)
         hash = hashlib.sha256()
         hash.update(bufreverse(datastr.decode('hex'))[:76])
         hash.update(nonce_bin)
@@ -305,12 +321,22 @@ class Miner(object):
         hash = hash_o.digest()
         # do the basic 0x00000000 ending test
         if not hash.endswith('\x00\x00\x00\x00'):
+            if not byteswap:
+                return self.check_work(datastr, targetstr, nonce, True)
             return False, nonce_bin
         return long(wordreverse(bufreverse(hash)).encode('hex'), 16) < target, nonce_bin
 
-    def submit_work(self, rpc, original_data, nonce_bin):
+    def submit_work(self, rpc, original_data, nonce_bin, who):
         result = rpc.getwork([original_data[:152] + bufreverse(nonce_bin).encode('hex') + original_data[160:256]])
         printer.say("result accepted?", repr(result))
+        if result == True:
+            who[5] += 1
+            if SAVE_SHARES and who[4]:
+                if not os.path.exists('shares/'+who[4]+'/'):
+                    os.makedirs('shares/'+who[4]+'/')
+                f = open('shares/'+who[4]+'/'+str(time.time()), 'wb')
+                f.write('\n')
+                f.close()
 
     def dowork(self):
         rpc = self.rpc
@@ -324,11 +350,11 @@ class Miner(object):
             wdata = self.work_manager.work_data
             wtarget = self.work_manager.work_target
         
-        for nonce in got:
+        for nonce, who in got:
             is_good, nonce_bin = self.check_work(wdata,wtarget, nonce)
             if is_good:
                 printer.say('sending good data')
-                self.submit_work(rpc, wdata, nonce_bin)
+                self.submit_work(rpc, wdata, nonce_bin, who)
             else:
                 printer.say('data was bad')
         

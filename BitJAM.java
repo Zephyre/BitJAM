@@ -22,6 +22,7 @@ public class BitJAM extends Applet implements Runnable {
     
     final int[] data = new int[32];
     final long[] target = new long[8];
+    MessageDigest digestPrehash;
     MessageDigest digestInside;
     MessageDigest digestOutside;
     final ByteBuffer digestInput = ByteBuffer.allocate(80);
@@ -32,6 +33,7 @@ public class BitJAM extends Applet implements Runnable {
         // initialize to some random value
 	nonce = rng.nextInt();
         try {
+            digestPrehash = MessageDigest.getInstance("SHA-256");
             digestInside  = MessageDigest.getInstance("SHA-256");
             digestOutside = MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {}
@@ -73,6 +75,8 @@ public class BitJAM extends Applet implements Runnable {
                         if (i < 8) {target[i] = (Long.reverseBytes(Long.parseLong(ts.substring(i*8, (i*8)+8), 16) << 16)) >>> 16;}
                     }
                 }
+                digestPrehash.reset();
+                digestPrehash.update(digestInput.array(), 0, 76);
             }catch(IOException e){}
         }
         while (System.currentTimeMillis() - lastgot_time < 30000) {
@@ -80,7 +84,12 @@ public class BitJAM extends Applet implements Runnable {
             else {nonce++;}
 
             digestInput.putInt(76, nonce);
-            digestOutput = digestOutside.digest(digestInside.digest(digestInput.array()));
+//            digestOutput = digestOutside.digest(digestInside.digest(digestInput.array()));
+            try{
+                digestInside = (MessageDigest) digestPrehash.clone();
+            } catch(CloneNotSupportedException e) {}
+            digestInside.update(digestInput.array(), 76, 4);
+            digestOutput = digestOutside.digest(digestInside.digest());
             if(digestOutput[28] == 0 && digestOutput[29] == 0 && digestOutput[30] == 0 && digestOutput[31] == 0){
                 for(int bi=6; bi >= 0; bi--){
                     long X = ((long)(0xFF & digestOutput[bi+3]) << 24) | ((long)(0xFF & digestOutput[bi+2]) << 16) | ((long)(0xFF & digestOutput[bi+1]) << 8) | ((long)(0xFF & digestOutput[bi]));
@@ -94,7 +103,7 @@ public class BitJAM extends Applet implements Runnable {
                     // loop continues if values were equal
                 }
             }
-            /*
+            //*
             if(System.currentTimeMillis() >= meter_time + 1000 ){
                 showStatus(
                     Long.toString((nonce-meter_hash))+
@@ -102,7 +111,7 @@ public class BitJAM extends Applet implements Runnable {
                     Integer.toString(nonce));
                 meter_hash = nonce;
                 meter_time = System.currentTimeMillis();
-            }*/
+            }//*/
             if((nonce & 65535) == 0){
                 try{
                     if (is.ready()) {
@@ -119,6 +128,8 @@ public class BitJAM extends Applet implements Runnable {
                                  if (i < 8){target[i] = (Long.reverseBytes(Long.parseLong(ts.substring(i*8, (i*8)+8), 16) << 16)) >>> 16;}
                             }
                         }
+                        digestPrehash.reset();
+                        digestPrehash.update(digestInput.array(), 0, 76);
                     }
                 }catch(IOException e){}
             }
