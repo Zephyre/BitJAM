@@ -70,12 +70,13 @@ class Printer(threading.Thread):
             time.sleep(0.01)
             while self.line:
                 print self.line.pop(0)
+        print 'Closing printer'
 printer = Printer()
 
 
 class ClientListener(threading.Thread):
     def __init__(self, host='', port=15063):
-        self.timeout = 5
+        self.timeout = 1
         self.host = host
         self.port = port
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -103,11 +104,18 @@ class ClientListener(threading.Thread):
                     conn, addr = s.accept()
                 except socket.timeout:
                     timeout = True
+#                except:
+#                    timeout = True
+#                    print 'client listener is clogged, waiting'
                 if not timeout:
                     printer.say( 'new client!', addr)
                     conn.setblocking(0)
                     self.new_clients.append((conn,addr))
+            print 'closing listener'
+            s.close()
+            self.done = True
         except:
+            print 'closing listener'
             self.done = True
             s.close()
             raise
@@ -140,17 +148,22 @@ class WorkManager(threading.Thread):
         except socket.error, e:
             if e.errno == 11: # socket isn't ready
                 pass
-            elif e.errno in (32, 104, 110): # 110 is timeout
+            elif e.errno in (32, 104, 110,113,111,101): # 110 is timeout
                 printer.say('removing client',client[1])
-                self.clients.remove(client)
+                if client in self.clients:
+                    try:
+                        client[0].close()
+                    except:
+                        pass
+                    self.clients.remove(client)
             else:
                 printer.say('strange error while trying to send work')
                 raise
     
     def init_client(self, client):
         c = client
-        if len(c) < 6:
-            c = [c[0], c[1], 'init', '', '', 0]
+        if len(c) < 7:
+            c = [c[0], c[1], 'init', '', '', 0, time.time()]
         else:
             c[2] == 'init'
         self.send_work(c)
@@ -172,18 +185,22 @@ class WorkManager(threading.Thread):
                     for c in nc:
                         c = self.init_client(c)
                         self.clients.append(c)
+                    printer.say(len(self.clients), 'clients')
                 
                 # see if there's anything new
                 for c in self.clients[:]:
+                    if self.done:
+                        break
                     try:
                         got = c[0].recv(1024)
                         if got:
-                            printer.say('GOT SOMETHING!',repr(got))
                             c[3] = c[3] + got
                         csplit = c[3].split('\n')
                         for piece in csplit[:-1]:
-                            if piece[-1] == '\r': piece = piece[:-1]
+                            c[6] = time.time()
+                            if piece and piece[-1] == '\r': piece = piece[:-1]
                             if len(piece) == 8:
+                                printer.say('GOT SOMETHING!',repr(got))
                                 # it's (probably) a nonce! :O
                                 ishex = True
                                 for ch in piece:
@@ -205,31 +222,47 @@ class WorkManager(threading.Thread):
                                             break
                                     if good_sendto and 35 > len(st[-1]) > 24:
                                         c[4] = st[-1]
+                                    else:
+                                        printer.say('what?! weird address?')
                                 #else:
                                 #    c[4] = piece
+                            elif piece == '':
+                                pass # keep alive
                             else:
                                 # probably unsupported features or somebody sending random data trying to break stuff
                                 printer.say('...but the thing I got is weird!')
                         # stuff the end back in in case we got a partial message
                         c[3] = csplit[-1]
+#                        if time.time() - c[6] > 60 * 3:
+#                            try:
+#                                c[0].close()
+#                            except:
+#                                pass
+#                            self.clients.remove(c)
                     except socket.error, e:
                         if e.errno == 11: # socket isn't ready
                             pass
-                        elif e.errno in (32,104,110): # client left,110=timeout
+                        elif e.errno in (32,104,110,113,111,101): # client left,110=timeout 111=conn refused
                             printer.say('removing client',c[1])
+                            try:
+                                c[0].close()
+                            except:
+                                pass
                             self.clients.remove(c)
                         else: # a strange and mysterious occurence
                             printer.say('client socket error')
                             raise
                 
                 # send out new work if there is any
-                if self.need_update:
+                if self.need_update and not self.done:
                     self.need_update = False
                     for c in self.clients[:]:
                         self.send_work(c)
             self.client_listener.stop()
             self.done = True
+            print 'closing work manager'
         except:
+            print 'closing work manager'
             # shutdown the client listener first so we can go down cleanly
             self.done = True
             self.client_listener.stop()
@@ -255,6 +288,7 @@ def wordreverse(in_buf):
 class BitcoinRPC(object):
     OID = 1
     def __init__(self, host, port, username, password):
+        self.host, self.port = host, port
         authpair = "%s:%s" % (username, password)
         self.authhdr = "Basic %s" % (base64.b64encode(authpair))
         self.conn = httplib.HTTPConnection(host, port, False, 30)
@@ -273,7 +307,8 @@ class BitcoinRPC(object):
             badresp = True
             print e
         if badresp:
-            printer.say('rpc got a bad response')
+            printer.say('rpc got a bad response, attempting to reestablish connection')
+            self.conn = httplib.HTTPConnection(self.host, self.port, False, 30)
             return None
         if resp is None:
             printer.say('no response from rpc')
@@ -305,7 +340,9 @@ class Miner(object):
         # a higher value might better here...?
         # anything older than the number of seconds
         # here is considered invalid/stale
-        self.manage_interval = 5
+        self.getwork_interval = 15
+        self.last_getwork_time = 0
+        self.manage_interval = 1
         self.work_manager = WorkManager()
         self.work_manager.start()
 
@@ -358,6 +395,9 @@ class Miner(object):
             else:
                 printer.say('data was bad')
         
+        if time.time() - self.last_getwork_time < self.getwork_interval:
+            return
+        self.last_getwork_time = time.time()
         work = rpc.getwork()
         if work is None or 'data' not in work or 'target' not in work:
             return
@@ -383,5 +423,6 @@ except:
     printer.done = True
     raise
 
+print 'finishing up'
 miner.work_manager.done = True
 printer.done = True
